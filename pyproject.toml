@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emailfinder"
+version = "0.1.0"
+description = "BounceZero — offline-first, provider-aware LinkedIn email finder + verifier with an audit-driven bounce re-scorer"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "BounceZero" }]
+dependencies = [
+    "dnspython>=2.4",
+]
+
+[project.optional-dependencies]
+smtp = ["aiosmtplib>=3.0"]
+providers = ["httpx>=0.27"]
+transliterate = ["text-unidecode>=1.3", "anyascii>=0.3"]
+validate = ["email-validator>=2.1"]
+dev = [
+    "pytest>=8.0",
+    "responses>=0.25",
+]
+all = [
+    "aiosmtplib>=3.0",
+    "httpx>=0.27",
+    "text-unidecode>=1.3",
+    "anyascii>=0.3",
+    "email-validator>=2.1",
+]
+
+[project.scripts]
+emailfinder = "emailfinder.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["emailfinder*"]
+
+[tool.setuptools.package-data]
+emailfinder = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "integration: hits the real network/DNS; deselect with -m 'not integration'",
+]

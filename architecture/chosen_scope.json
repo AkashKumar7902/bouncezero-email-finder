@@ -1,0 +1,65 @@
+{
+ "ranking": [
+  {
+   "angle": "Accuracy-max / bounce-elimination (BounceZero)",
+   "score": 9,
+   "rationale": "Best fit to the caller's explicitly-named killer feature: the retrospective 're-score my bounced list' engine that turns the audit's 560 real bounces into a per-address fix list plus permanent KB training. It also nails the three genuine accuracy levers the dossier ranks highest -- KB dominant-pattern ranker, provider-aware confidence caps (M365/catch-all never 'verified'), and known_bad_locals hard suppression -- all of which run fully offline with zero providers and are directly implementable from the seed data (57 domains already carry known_bad_locals, every domain carries no_bounce_locals). Weakness: batch/CSV I-O is present but its web surface is thin, so it needs grafts from #3 and #4 to hit the caller's full 'CLI + batch + web UI' target."
+  },
+  {
+   "angle": "End-to-end outreach workflow / batch-first",
+   "score": 7.5,
+   "rationale": "Strongest batch-first ergonomics: per-domain fingerprint-once dedupe, mail-merge-ready enriched CSV with the exact column set a job-seeker needs, and a DSN/mbox feedback loop that is a superset of the manual CSV re-score. Compliance-native pipeline (suppression + opt-out + provenance in-line) matches the locked legal constraints well. Marked down because the send-plan generator (Gmail 500/24h caps, warmup, cadence) drifts toward the sending side the dossier deliberately keeps separate from finding -- valuable but a nice-to-have, not core to a finder+verifier. Its batch core and DSN parser are the pieces worth grafting."
+  },
+  {
+   "angle": "Polished local web app",
+   "score": 7,
+   "rationale": "Delivers the surface the caller wants that the accuracy-max angle underinvests in: a localhost SPA with single-lookup, provider badges, confidence bars, honest visible caps on M365/catch-all, and a 'why this guess' explainability popover that doubles as the required per-record provenance. Great for a non-technical job-seeker. Marked down because it makes the web UI the primary/heaviest surface (caller specified a MINIMAL local web UI) and it defers the bounce re-scorer -- the highest-value capability -- to a lighter mark-bounced/confirm loop. Its explainable UI and provider-badge treatment are the grafts to keep, sized down."
+  },
+  {
+   "angle": "MVP / ship-fastest CLI (refr)",
+   "score": 7,
+   "rationale": "Cleanest, most correct feature decomposition and the best articulation of the offline-first zero-provider default, the token pipeline, and honest scoring. Excellent engineering baseline and the safest to ship. But it explicitly puts BOTH the web UI and the automated bounce re-scorer out of scope (manual confirm/badlocal only) -- precisely the two things the caller flagged as required (minimal web UI + killer re-score-the-audit capability). So as a standalone scope it under-delivers against the brief; as a source of a crisp, well-scoped core library and CLI ergonomics it is the model to build the synthesis on."
+  }
+ ],
+ "chosen_direction": "Build BounceZero (the accuracy-max / bounce-elimination angle) as the spine -- an offline-first, provider-aware, derivation-only Python package whose signature capability is re-scoring the user's existing audit/bounced list -- and graft onto it: (1) the MVP/refr angle's clean importable core library, token pipeline, and CLI ergonomics; (2) the batch-first angle's per-domain fingerprint-once dedupe, mail-merge-ready CSV I/O, and DSN/mbox feedback parser; and (3) the web-app angle's MINIMAL localhost UI (single lookup + batch upload + results table + 'why this guess' explainability + provider badge) as a thin front-end over the same core. One engine, three surfaces (CLI, batch CSV, minimal web UI), zero paid providers required, paid finder/verifier adapters pluggable behind a cached common interface and off by default.",
+ "synthesized_scope": "A single Python package, offline-first and clean-room by construction, exposing one importable core engine [find(name, domain) -> ranked, scored result] behind three surfaces: a scriptable CLI (single lookup + batch), a batch-CSV mode (mail-merge-ready output), and a minimal localhost web UI (single-lookup card, CSV upload, sortable results table, 'why this guess' explainability, provider badge). The engine ships the audited 219-domain domain_kb.json baked in and works with no API keys at all. Pipeline per query: local LinkedIn-slug parse (name-only, never fetched) -> India-aware token normalization (NFKD/diacritics, nicknames, compound surnames, first+initial, mononyms with no fabricated surname/digits) -> live MX resolution + provider classification (gateway precedence, lowest-preference-backend tie-break, implicit-MX A/AAAA fallback) -> KB dominant-pattern ranking (>=60% share emits literal template+separator; else global priors, dot forced) -> role-local/disposable filtering -> known_bad_locals + global suppression/opt-out check -> 0-100 confidence + {DELIVERABLE/UNDELIVERABLE/RISKY/UNKNOWN} status with catch-all/M365 hard caps and separate is_catch_all/is_role/is_disposable flags -> per-record provenance log in a per-user silo. The headline differentiator is a bounce-list re-scorer: ingest the user's bounced/audit CSV (or DSN mailbox), bucket each row by RFC 3463 enhanced code (5.1.1/5.1.10 -> wrong guess banked to known_bad_locals + corrected candidate emitted; DBEB-M365 5.4.1 -> probable-invalid banked; 5.7.x -> sender-side, do not refetch; routing_loop/dns_failure -> domain circuit-break), emit a per-address fix list, and upsert the KB so accuracy compounds. Optional, off by default and pluggable: a live SMTP RCPT verifier that detects the port-25 block within seconds and degrades to verification_unavailable/UNKNOWN (never marks a timeout/4xx as invalid), and HTTPS finder/verifier adapters (Anymail Finder reference adapter + interface for Hunter/MillionVerifier) behind a mandatory sha256-keyed cache, routed only to M365/catch-all/unknown-pattern domains.",
+ "must_have_features": [
+  "Importable core engine as a Python package (find/score) with a stable API so CLI, batch, and web UI are all thin wrappers over one code path",
+  "Zero-provider local mode as the default and fully-functional path (no API key required)",
+  "India-aware token pipeline: NFKD/diacritic normalization, title/suffix strip, nickname + compound/hyphenated surname expansion, first+initial and mononym handling (never fabricate a surname or append digits), dedupe of name-variant x template cross-product",
+  "KB-driven ranker over the seeded 219-domain domain_kb.json: dominant_shape >=60% share emits the literal template + stored separator (dot for chargebee, none for opengov flast, underscore for trimble); global-priors fallback (first.last 0.60, dot forced) only for unknown domains",
+  "MX lookup + provider classification via dnspython: gateway precedence (Proofpoint/Mimecast/IronPort/Barracuda beat backend), lowest-preference-backend tie-break, implicit-MX A/AAAA fallback, dns_failure -> UNDELIVERABLE",
+  "Confidence 0-100 + status {DELIVERABLE/UNDELIVERABLE/RISKY/UNKNOWN} with catch-all and Microsoft 365 hard caps and separate is_catch_all/is_role/is_disposable/webmail flag fields",
+  "known_bad_locals hard suppression -> force UNDELIVERABLE (57 domains already seeded), directly eliminating repeat instances of the audit's #1 bounce cause",
+  "Bounce-list re-scorer: ingest bounced/audit CSV, classify each row by RFC 3463 enhanced code, emit per-address fix list + corrected candidate + KB upsert (the killer capability)",
+  "KB feedback loop: upsert pattern/separator/provider/verified_examples on DELIVERABLE or confirm; append known_bad_locals on true not-found and DBEB-M365 5.4.1",
+  "Clean-room compliance gate: local LinkedIn-slug parse only (never fetch/scrape/cookies), global suppression + opt-out check before any result is returned, per-record provenance log, per-user data silo",
+  "Role-local + disposable filter from vendored static JSON",
+  "Domain MX/provider cache (sqlite/JSON): provider, mx, is_catch_all tri-state, learned pattern+separator, last_probed_at, with TTL; fingerprint each domain once per batch",
+  "CLI single-lookup and batch-CSV modes with human-readable + --json output and mail-merge-ready enriched CSV (email, template, separator, provider, status, confidence, flags, alt candidates, provenance)",
+  "Minimal localhost web UI over the same core: single-lookup card, provider badge, confidence bar + status chip with visible caps, 'why this guess' explainability popover, CSV upload -> results table -> enriched CSV export",
+  "Pluggable EmailFinder/EmailVerifier interface with mandatory sha256(provider+normalized_input) cache and at least one reference adapter (Anymail Finder); providers optional and off by default, routed only to M365/catch-all/unknown domains",
+  "Optional SMTP RCPT verifier, off by default, with fast port-25-block detection degrading to verification_unavailable/UNKNOWN (never mark timeout/4xx/connection failure as invalid)"
+ ],
+ "nice_to_have": [
+  "DSN/mbox feedback ingest (parse a bounce mailbox by enhanced code) as a superset of the manual CSV re-score path",
+  "Send-plan generator enforcing Gmail 500-recipients/24h, per-recipient-domain cap ~20-30/day, warmup ramp, jittered business-hours timing, and >3% bounce circuit-breaker",
+  "Full paid-provider adapter set beyond the one reference (Hunter as finder + pattern-evidence-into-KB, MillionVerifier for cheap bulk verify) with per-provider rate limits and typed errors",
+  "Domain KB inspector UI: browse the 219-domain seed (learned pattern, separator, provider, verified examples) with in-UI bounce/confirm feedback",
+  "CSV column-mapping wizard and progress bar in the web batch flow",
+  "Auto-flip a provider to NO_PROBE when its policy-reject rate crosses a threshold (self-correcting map)",
+  "Public opt-out web page (no login) feeding the global suppression list",
+  "SMB/startup size-conditioning heuristic (boost bare-first under a headcount signal) and top-2 romanization for non-Latin scripts",
+  "Copy-ready outreach line and one-click copy-to-clipboard per result"
+ ],
+ "explicitly_deferred": [
+  "Any LinkedIn automation: scraping, headless browsers, cookie/li_at/session import, DOM-scraping extensions (permanent red line, not a phase)",
+  "Automated email sending, campaign/sequence management, warmup automation (finding and sending stay separate deliberate acts; a send plan is at most a nice-to-have artifact, never auto-sent)",
+  "Default-on live SMTP RCPT probing from this host or a laptop (port 25 blocked; only ever via an optional off-box VPS worker with clean static IP/PTR/SPF)",
+  "Cross-user contact pooling, resale, or any persistent scraped people-database (Kaspr/Delete-Act data-broker trigger)",
+  "Bulk whole-domain verification / dictionary-attack enumeration patterns",
+  "Labeling Microsoft 365 5.4.1 or catch-all 250 results as 'verified'/DELIVERABLE anywhere in CLI, CSV, or UI",
+  "Cloud/multi-tenant hosting; v1 is a local per-user app with per-user silo and ~90-day retention + delete",
+  "Forensic 24-substatus verifier taxonomy (ZeroBounce-tier) and multi-romanization beyond the top-2 candidates"
+ ]
+}

@@ -1,0 +1,176 @@
+{
+ "confirmed": [
+  {
+   "summary": "NameVariant.initials is never consumed by templates.render/_resolve_atom, so South-Indian first+initial names generate no first.<init>/first<init> candidates, and on a first.last-dominant KB domain produce best=null.",
+   "file": "emailfinder/templates.py",
+   "line": 49,
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "failure_scenario": "`emailfinder find \"Ashwath S\" --domain amadeus.com` returns best=null with note 'no candidate local parts could be generated for this name'. parse_name('Ashwath S') -> first='ashwath', initials=['s'], last=None; expand_variants emits a variant carrying initials=['s'] (names.py step 4), but _resolve_atom only handles first/last/f/l/m/middle and never reads v.initials, so 'ashwath.s' and 'ashwaths' (the exact forms MODULE_CONTRACTS line 53 and RESEARCH_DOSSIER 1.5 specify) are never rendered. On amadeus (first.last-dominant KB) the KB path needs a `last`, which is None, so zero candidates survive.",
+   "suggested_fix": "Either add an 'i'/'init' atom to _resolve_atom (returning ''.join(v.initials)[0] / joined initials) plus register first.<init>/first<init> concat+separated templates, OR in names.expand_variants emit the first_initial variant with last=''.join(pn.initials) so existing first.l/firstl/first templates produce ashwath.s / ashwaths / ashwath. Guard so a multi-letter initial join does not emit junk flast forms.",
+   "repro_note": "Reproduced via CLI (best=null, expected note) and by direct trace: render('first.last'|'first.l'|'firstl', <first=ashwath,initials=['s']>, sep) all return None; only 'ashwath' (first-only) ever renders. Contradicts MODULE_CONTRACTS.md:53 which specifies 'Ashwath S' -> {ashwath.s, ashwaths, ashwath}."
+  },
+  {
+   "summary": "scoring._base_score labels every KB-sourced candidate as 'KB dominant pattern', so a chosen FALLBACK template (prior 0.5) is falsely reported as the domain's dominant pattern (known issue C).",
+   "file": "emailfinder/scoring.py",
+   "line": 139,
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "failure_scenario": "`emailfinder find \"Shivam Singh\" --domain ge.com --json` picks shivam.s (first.l fallback, prior 0.50) because shivam.singh (true dominant first.last, 97% share) is in known_bad_locals; yet the reasons array reads \"KB dominant pattern 'first.l' (sep '.') matched -> base 80 (prior 0.50)\". The prior 0.50 marks it as a fallback (KB_DOMINANT_PRIOR=0.9), but the provenance string still says 'dominant', corrupting the CLI/web/JSON 'why this guess' surface.",
+   "suggested_fix": "In _base_score, branch on the candidate prior: `label = 'KB dominant pattern' if cand.prior >= candidates.KB_DOMINANT_PRIOR else 'KB fallback pattern'` (candidates.KB_DOMINANT_PRIOR=0.9 already exists), or carry an explicit is_dominant flag on Candidate from generate_from_kb, and word the reason accordingly.",
+   "repro_note": "Reproduced via CLI JSON on ge.com: best.reasons = [\"KB dominant pattern 'first.l' (sep '.') matched -> base 80 (prior 0.50)\"] for local shivam.s. Confirmed candidates.py:25 KB_DOMINANT_PRIOR=0.9 and :26 fallback start 0.5, so prior distinguishes the two cleanly."
+  },
+  {
+   "summary": "rank() gates on the shape_distribution argmax (dominant_share) but renders the dominant template from the stale dominant_shape field via template_for_kb, so when the two diverge the true dominant pattern is dropped AND excluded from fallbacks.",
+   "file": "emailfinder/ranking.py",
+   "line": 97,
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "failure_scenario": "When dominant_shape disagrees with the shape_distribution argmax, dominant_share() returns (argmax_shape, high_share) which passes the 0.60 gate, but rank() then calls templates.template_for_kb(kb_entry) which re-reads the stale dominant_shape and renders that (minority) template at prior 0.9; _fallback_specs(exclude_shape=argmax) then excludes the argmax shape, so the actual dominant pattern is never generated at any prior. This is reachable through the shipped feedback loop: kb_store.upsert_verified (kb_store.py:255) sets entry['dominant_shape']=shape(last verified local) UNCONDITIONALLY while only incrementing shape_distribution, so a single verified minority-shape local desyncs the two fields.",
+   "suggested_fix": "Make one field authoritative: in rank(), build the dominant (template,separator) from the `shape` returned by dominant_share() (e.g. a template_for_kb variant taking an explicit shape) instead of re-reading kb_entry['dominant_shape'], so the gated shape, rendered template, and excluded fallback shape always match. Root cause also warrants fixing kb_store.upsert_verified:255 to only promote dominant_shape when the new shape is actually the distribution argmax.",
+   "repro_note": "Reproduced end-to-end via the real feedback loop: loaded shipped seed for ge.com (dominant_shape=first.last, dist {first.last:59, first.l:2}), then a single kb_store.upsert_verified(...,'shivam.s') flipped dominant_shape to 'first.l' while argmax stayed first.last (95%). rank(['ajith kumar']) then returned ONLY 'ajith.k first.l 0.9' \u2014 the 95% dominant first.last (ajith.kumar) was never generated. Also reproduced directly with a hand-built divergent kb dict. Note: shipped seed has 0/219 divergent entries, so it only manifests after use."
+  },
+  {
+   "summary": "A transient DNS timeout/SERVFAIL is collapsed into the same 'dns_failure' error as NXDOMAIN, which scoring maps to permanent UNDELIVERABLE (score 0).",
+   "file": "emailfinder/dns_mx.py",
+   "line": 150,
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "failure_scenario": "With a flaky/blackholed resolver, resolve_mx('real-domain.com') hits dns.exception.Timeout. _query_mx (and _has_address_record) catch Timeout in the SAME except clause as NXDOMAIN and return []; resolve_mx returns MXInfo(error='dns_failure'). engine.py sets base_flags['dns_failure']=True, scoring._syntax_or_mx_failed returns True, and resolve_status/score_candidate return Status.UNDELIVERABLE with score 0. A perfectly deliverable mailbox is reported as permanently UNDELIVERABLE because DNS momentarily timed out. The module docstring itself calls a timeout 'an unavailable/unknown signal', contradicting the actual mapping.",
+   "repro_note": "Reproduced live: patched dns.resolver.Resolver.resolve to raise dns.exception.Timeout -> resolve_mx('real-domain.com').error == 'dns_failure'; _syntax_or_mx_failed({'dns_failure':True}) == True; resolve_status(50, OTHER, None, None, {'syntax_ok':True,'dns_failure':True}) == Status.UNDELIVERABLE. Note this is a DNS-layer defect, not the SMTP-verification path invariant #3 literally names, but it violates the same 'transient failure never becomes a permanent negative verdict' principle even more severely (no recovery path).",
+   "suggested_fix": "In _query_mx/_has_address_record, catch transient failures (dns.exception.Timeout, dns.resolver.NoNameservers/SERVFAIL, LifetimeTimeout) separately from NXDOMAIN/NoAnswer and surface a distinct error (e.g. error='dns_timeout'). In scoring, map that transient error to UNKNOWN/verification_unavailable rather than UNDELIVERABLE; only NXDOMAIN/no-records is UNDELIVERABLE."
+  },
+  {
+   "summary": "resolve_domain_for_company returns None whenever more than one candidate TLD resolves, and the 206-entry assets/company_domains.json seed map is never wired into package data (issue A).",
+   "file": "emailfinder/dns_mx.py",
+   "line": 124,
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "failure_scenario": "For any brand that defensively registers multiple TLDs (all with MX), resolve_domain_for_company builds resolved=[<slug>.com, <slug>.in, <slug>.io], len(resolved)>1, and the `if len(resolved)==1` guard returns None. So `find --company Chargebee` (and Adobe, Stripe, etc.) cannot derive a domain and the CLI falls back to 'no domain: pass --domain'. The feature is effectively non-functional for well-known companies. assets/company_domains.json (206 audit companies -> canonical domains) exists but is absent from emailfinder/data/ and unreferenced anywhere in emailfinder/.",
+   "repro_note": "Reproduced: with resolve_mx mocked so chargebee.com/.in/.io all resolve, resolve_domain_for_company('Chargebee', Config()) -> None; with only one TLD resolving it correctly returns that domain. Confirmed grep -rn company_domains emailfinder/ finds nothing (NOT WIRED); assets/company_domains.json has 206 entries keyed by normalized slug. Severity lowered from high to medium: no wrong/unsafe answer is produced, it degrades gracefully with a clear 'pass --domain' message.",
+   "suggested_fix": "Ship assets/company_domains.json into emailfinder/data/ and consult it first (normalized-slug lookup) in resolve_domain_for_company before any DNS guessing. For the DNS fallback, stop treating multiple resolving TLDs as ambiguous->None; prefer .com when it resolves, else the lowest-index TLD hit."
+  },
+  {
+   "summary": "port25_open's socket.create_connection applies its timeout PER resolved address, so the dual-stack canary (IPv6+IPv4) doubles the wall-clock on a blocked host (~12s at the default 6s timeout) \u2014 the real root cause of issue D that caching/NO_PROBE short-circuits do not fix.",
+   "file": "emailfinder/smtp_probe.py",
+   "line": 70,
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "failure_scenario": "On a host that blocks outbound :25, `find <name> --domain gmail.com --verify` reaches engine step 7 (gmail classifies as CONSUMER_GMAIL -> VerifyStrategy.PROBE, so it is NOT short-circuited) and calls port25_open(timeout=cfg.smtp_connect_timeout=6.0). The canary gmail-smtp-in.l.google.com resolves to 2 addresses (AF_INET6 + AF_INET); socket.create_connection tries each with the full 6s timeout -> ~12s total. Caching only helps the 2nd..Nth row; the first row still eats the doubled timeout. _probe_session has the same multiplication against multi-address MX hosts.",
+   "repro_note": "Reproduced live: getaddrinfo('gmail-smtp-in.l.google.com',25) returns 2 addrs (IPv6+IPv4); port25_open(timeout=3.0) measured 6.01s (exactly 2x). Note the original finding mislabels gmail consumer as NO_PROBE/accept-all \u2014 it is actually a PROBE provider, and genuine NO_PROBE strategies (M365/Yahoo) never reach port25_open because engine step 7 gates on strategy==PROBE. The per-address multiplication itself is real and confirmed.",
+   "suggested_fix": "Bound port25_open by a single overall wall-clock deadline: resolve the canary with getaddrinfo and try one address, or iterate addresses subtracting elapsed from a shared budget (or pass per-attempt timeout = connect_timeout/len(addresses)). Apply the same to _probe_session's connect."
+  },
+  {
+   "summary": "_load_suppression stores email/identity values from the global opt-out file verbatim while is_suppressed always normalizes the query, so any suppression row not written by add_suppression (DSN feed / manual import / differing case) never matches.",
+   "file": "emailfinder/compliance.py",
+   "line": 154,
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "failure_scenario": "A manually-curated or DSN-fed global_suppression.jsonl row {\"email\":\"Foo.Bar@Example.COM\"} is present. is_suppressed('foo.bar@example.com',...) -> False (query lowercased, but stored set holds raw mixed-case), and even is_suppressed('Foo.Bar@Example.COM',...) -> False (query still lowercased). The engine then returns a result for a recipient who is on the opt-out list, breaking the Art. 21 opt-out guarantee for externally-fed rows. Same defect for 'identity' rows (stored verbatim vs _identity_key normalization).",
+   "repro_note": "Reproduced: wrote {\"email\":\"Foo.Bar@Example.COM\"} directly to global_suppression.jsonl -> both is_suppressed('foo.bar@example.com',...) and is_suppressed('Foo.Bar@Example.COM',...) returned False; an 'identity':'John Doe@Example.COM' row also failed to match is_suppressed(None,'John Doe','example.com'). Rows written via add_suppression are unaffected (it pre-normalizes).",
+   "suggested_fix": "Normalize on read in _load_suppression: emails.add(_norm_email(row['email'])) and identities.add(str(row['identity']).strip().lower()) matching the canonicalization used to build keys, so rows from any source match regardless of case/whitespace."
+  },
+  {
+   "summary": "resolve_domain_for_company returns None for real firms owning multiple TLDs, and the 206-entry assets/company_domains.json seed map is never packaged/wired, so --company is broken for most audit companies (known issue A).",
+   "file": "emailfinder/dns_mx.py",
+   "line": 124,
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "failure_scenario": "`emailfinder find \"Test User\" --company Chargebee` prints 'No candidate could be produced. note: no domain'. resolve_mx confirms chargebee.com (5 MX), chargebee.in (1 MX) AND chargebee.io (5 MX) all resolve live -> len(resolved)==3 -> the `if len(resolved)==1` guard returns None. assets/company_domains.json (contains chargebee->chargebee.com) exists but is NOT in emailfinder/data and is referenced by no module (grep for 'company_domains' over emailfinder/ finds nothing), so the authoritative map is dead weight and --company/find_batch-by-company fall back to the ambiguous DNS heuristic.",
+   "suggested_fix": "Copy company_domains.json into emailfinder/data, load it once in Engine.__init__, and have resolve_domain_for_company (or the engine before calling it) consult the seed map FIRST by slug/exact match, returning that domain unambiguously; only fall back to the DNS-guess heuristic on a miss, and when the heuristic finds several TLDs prefer .com rather than declaring ambiguity.",
+   "repro_note": "Reproduced: DNS shows 3 live TLDs for chargebee -> None; CLI --company Chargebee yields no domain; grep confirms company_domains.json is unwired."
+  },
+  {
+   "summary": "Re-scorer buckets valid-but-full / over-quota / too-large mailboxes (5.2.2/5.2.3/5.2.0, 'mailbox is full', 'over quota') as WRONG_GUESS and permanently banks the local into known_bad_locals, corrupting the KB with false negatives.",
+   "file": "emailfinder/rescore.py",
+   "line": 256,
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "failure_scenario": "A DSN/CSV row for a reachable-but-full mailbox is banked as known-bad, forcing every future find of that local to UNDELIVERABLE. Reproduced two paths: (1) _verdict_from_enhanced('5.2.2')/'5.2.3'/'5.2.0') -> 'WRONG_GUESS' because the catch-all `if subject in ('1','2'): return WRONG_GUESS` rule treats every 5.2.x mailbox-status code as non-existent; classify_bounce then returns WRONG_GUESS which _handle_row banks. (2) Text path: dsn.classify_enhanced(None,550,'mailbox is full') and 'over quota exceeded' return 'inactive_account' (their keywords live in dsn._INACTIVE_KW), and ENHANCED_CODE_MAP['inactive_account']='WRONG_GUESS' -> banked. RESEARCH_DOSSIER 2.2 explicitly classifies 452 mailbox-full/over-quota as transient and 552 storage/size as permanent-but-NOT-a-mailbox-existence signal (smtp_probe._map_rcpt already honors this: 552 -> non_signal), so the rescore path contradicts the dossier and the prober.",
+   "suggested_fix": "In _verdict_from_enhanced restrict the subject-class WRONG_GUESS branch to subject=='1' only; map 5.2.2/5.2.3/5.2.0 to TRANSIENT/non-bank and keep only 5.2.1 (disabled) as bankable. Split 'inactive_account' so disabled/suspended is bankable but full/over-quota is not \u2014 e.g. give over-quota/full its own reason_class in dsn (mapping to TRANSIENT), or map 'inactive_account' to a non-bank verdict for the quota keywords.",
+   "repro_note": "Reproduced: _verdict_from_enhanced('5.2.2')/'5.2.3'/'5.2.0')->WRONG_GUESS; classify_enhanced(None,550,'mailbox is full'/'over quota exceeded')->inactive_account; ENHANCED_CODE_MAP['inactive_account']->WRONG_GUESS. Dossier lines 110-111 confirm 452 transient / 552 not mailbox-existence."
+  },
+  {
+   "summary": "Per-domain catch-all fingerprint is never computed/cached; is_catch_all stays None in the DomainFingerprint and smtp_probe.verify re-runs the 3-RCPT catch-all guard on every candidate and every batch row, violating the fingerprint-once contract.",
+   "file": "emailfinder/engine.py",
+   "line": 438,
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "failure_scenario": "With --verify against an open-:25 host: Engine._fingerprint always stores is_catch_all=None (line 432) and nothing ever writes a detected catch-all back, so _cached_catchall() always returns None; the domain-level catch_all passed into scoring is never driven by detection. Engine.find calls smtp_probe.verify once per candidate (up to _MAX_PROBE=3) and once per batch row, and verify() unconditionally calls probe_domain_catchall (3 random RCPTs) each time (smtp_probe.py:160). A multi-row batch against one catch-all domain therefore issues ~3 catch-all probes per row instead of one per domain, contradicting MODULE_CONTRACTS ('catch-all fingerprint happen ONCE per distinct domain', lines 28/47/374) and looking like directory harvesting to abuse desks. Not a DELIVERABLE-invariant break \u2014 verify() still downgrades a 250 on a detected catch-all to catch_all in-band.",
+   "suggested_fix": "Detect catch-all once per domain in the engine: on the first verify, write the detected is_catch_all into the cached DomainFingerprint via cache.put_domain, and pass the cached tri-state into smtp_probe.verify so probe_domain_catchall is skipped when already known; drive scoring's catch_all from that cached value instead of the always-None _cached_catchall.",
+   "repro_note": "Established by code inspection (:25 blocked in this env): _fingerprint sets is_catch_all=None with no write-back; _cached_catchall reads it back as None; verify() calls probe_domain_catchall on every invocation; find loops verify per candidate and find_batch per row."
+  },
+  {
+   "summary": "The `web` subcommand's `--host` flag flows unvalidated into ThreadingHTTPServer, letting the operator defeat the loopback-only invariant while the help text claims 'loopback only'.",
+   "file": "emailfinder/cli.py",
+   "line": 179,
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "failure_scenario": "`emailfinder web --host 0.0.0.0` -> cmd_web passes args.host straight to web.serve(), which does `ThreadingHTTPServer((host, port), handler)` with no check. Reproduced: `ThreadingHTTPServer(('0.0.0.0', 8809), handler).server_address == ('0.0.0.0', 8809)` \u2014 the no-auth UI (find/batch/rescore/opt-out, KB read, shared last-batch export) is then reachable from any routable host, contradicting safety invariant 5 and the flag's own 'loopback only' help string. Nothing in serve() or cmd_web enforces the invariant.",
+   "suggested_fix": "Enforce loopback in web.serve(): reject or hard-normalize any host not in {127.0.0.1, ::1, localhost} (raise ValueError, or default back to 127.0.0.1 with a loud warning). Either drop the --host flag from cli.py or validate it in cmd_web before calling serve; if non-loopback must be allowed, gate it behind an explicit opt-in flag plus a warning.",
+   "repro_note": "Reproduced: bound handler to ('0.0.0.0',8809) with no error/validation; cli.py cmd_web passes args.host verbatim to serve() -> ThreadingHTTPServer((host,port)). Severity kept high: directly contradicts a documented safety invariant AND misleading help text, though it requires an explicit operator flag (not attacker-triggerable on defaults)."
+  },
+  {
+   "summary": "User-supplied CSV fields are written verbatim into the downloadable enriched/fix-list CSVs, enabling spreadsheet formula (CSV) injection.",
+   "file": "emailfinder/batch.py",
+   "line": 169,
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "failure_scenario": "A batch row with company `=cmd|'/c calc'!A1` produces an enriched CSV whose `company` cell is exactly `=cmd|'/c calc'!A1` (reproduced via `emailfinder batch /tmp/inj.csv -o out.csv`: output company column = `=cmd|'/c calc'!A1`). These CSVs are explicitly meant to be opened in Excel/Sheets and mail-merged, where a cell leading with = + - @ (or tab/CR) is evaluated as a formula -> command execution / data exfil on the recipient's machine. write_enriched_csv/_enriched_row (batch.py) and write_fixlist (rescore.py line ~481, plain csv.writer) both write untrusted strings unescaped.",
+   "suggested_fix": "Neutralize formula-leading cells before writing: in _enriched_row/write_enriched_csv (batch.py) and write_fixlist (rescore.py), prefix any string value beginning with = + - @ TAB or CR with a leading single-quote (or space). Apply centrally to every string written to output CSVs.",
+   "repro_note": "Reproduced end-to-end via CLI batch; enriched CSV company cell was the raw `=cmd|'/c calc'!A1`. csv.DictWriter (batch.py:166-169) and csv.writer (rescore.py:478-491) perform no formula-guard. Severity medium (requires victim to open the file in a spreadsheet) \u2014 matches reporter."
+  },
+  {
+   "summary": "POST handlers that respond before reading the request body (unknown-path 404 and early error returns) leave body bytes unread, desyncing the next request on a keep-alive HTTP/1.1 connection.",
+   "file": "emailfinder/web.py",
+   "line": 301,
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "failure_scenario": "With protocol_version='HTTP/1.1' (keep-alive), a `POST /api/nope` carrying a Content-Length body hits the do_POST else branch which calls self._json(404,...) without draining the body; the leftover bytes are parsed as the start of the next pipelined request. Reproduced on the same socket: after the 404, a follow-up `GET /` returned `HTTP/1.1 501 Unsupported method ('hello-body-1234GET')`. The broad `except Exception` path (web.py:304) has the same failure mode for any handler that errors before reading the body.",
+   "suggested_fix": "Always drain the body before responding: call self._read_body() unconditionally at the top of do_POST (and pass bytes to handlers), or send `Connection: close` on any 404/error response, or set protocol_version='HTTP/1.0'.",
+   "repro_note": "Reproduced with a raw socket: pipelined POST /api/nope (Content-Length body) + GET / on one HTTP/1.1 keep-alive connection produced a 501 'Unsupported method (...GET)' for the second request \u2014 confirms the body was never drained. Severity medium \u2014 matches reporter."
+  },
+  {
+   "summary": "classify_bounce looks up the whole compound reason_class string in ENHANCED_CODE_MAP instead of splitting it, so 'connection_failure; temporary_failure' misses both tokens and falls through to UNKNOWN instead of DOMAIN_ISSUE.",
+   "file": "emailfinder/rescore.py",
+   "line": 277,
+   "verdict": "CONFIRMED",
+   "severity": "low",
+   "failure_scenario": "The audit row firstname.lastname@example.com has reason_class 'connection_failure; temporary_failure'. In classify_bounce: _verdict_from_enhanced(None)=None, then ENHANCED_CODE_MAP.get('connection_failure; temporary_failure')=None (only the atomic keys 'connection_failure'->DOMAIN_ISSUE and 'temporary_failure'->TRANSIENT exist), smtp_code is None, so verdict=UNKNOWN with detail 'unclassified bounce \u2014 left untouched for manual review'. Because connection_failure is present it should bucket DOMAIN_ISSUE (circuit-break the domain).",
+   "suggested_fix": "In classify_bounce, when the whole-string lookup misses, split (row.reason_class or '') on /[;,]/, map each token through ENHANCED_CODE_MAP, and take the most-severe verdict present using a precedence order (DOMAIN_ISSUE > WRONG_GUESS > PROBABLE_INVALID_M365 > SENDER_SIDE > TRANSIENT) before falling back to the smtp_code/UNKNOWN branch.",
+   "repro_note": "Reproduced two ways. (1) Direct call: BounceRow(reason_class='connection_failure; temporary_failure') -> classify_bounce=UNKNOWN, while the atomic 'connection_failure' -> DOMAIN_ISSUE. (2) CLI `emailfinder rescore emailfinder/data/audit_records.csv -o /tmp/f.csv` yields 33 UNKNOWN rows, and grep of /tmp/f.csv shows the lenevo.com row bucketed 'UNKNOWN,...,unclassified bounce \u2014 left untouched for manual review'. Severity low is honest: it fails conservatively to manual review rather than banking a wrong verdict, and it is a single audit row."
+  },
+  {
+   "summary": "An email-only opt-out never blocks a guessed result: the engine's single suppression gate passes email=None, so the email suppression set is never consulted against the address the pipeline generates, and the exact opted-out address is returned on every surface.",
+   "file": "emailfinder/engine.py",
+   "line": 132,
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "failure_scenario": "A recipient opts out with only their address (CLI `emailfinder optout john.doe@example.com` -> add_suppression('john.doe@example.com', None, None, 'cli_optout'); same for web /api/optout when only email is entered). Later find('John Doe', domain='example.com') calls compliance.is_suppressed(None, 'John Doe', 'example.com'): email is None so the email set is skipped, and no name@domain identity row exists, so suppressed=False and best.email='john.doe@example.com' is returned. Reproduced: suppressed=False, best.email='john.doe@example.com'. Violates the absolute Art.21 opt-out (dossier 8.1) on cli/web/batch/json since all call Engine.find.",
+   "suggested_fix": "After ranking (before returning/logging, ~line 278-302), re-check suppression against the actually-generated addresses: for `best` (and ideally each alternate) call self.compliance.is_suppressed(f'{cand.local_part}@{resolved_domain}', name_str, resolved_domain); if best matches, return FindResult(suppressed=True) with no address and no KB upsert/provenance leak.",
+   "repro_note": "Reproduced via scratchpad script against real Engine with a temp data_dir: add_suppression email-only then find -> suppressed=False, best.email=john.doe@example.com. Confirmed the shipped CLI `optout` (cli.py:667) and web handler (web.py:348) both create email-only rows, so this is the primary public opt-out path."
+  },
+  {
+   "summary": "The suppression gate runs before company->domain resolution, so an identity opted out as name@domain is not blocked when the caller supplies --company instead of --domain.",
+   "file": "emailfinder/engine.py",
+   "line": 132,
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "failure_scenario": "Identity opted out via add_suppression(None, 'John Doe', 'example.com', ...). find('John Doe', domain='example.com') correctly returns suppressed=True, but find('John Doe', company='Example') where resolve_domain_for_company returns 'example.com' returns suppressed=False with best.email='john.doe@example.com'. The gate at line 132 runs with domain=None (company not yet resolved), so _identity_key('John Doe', None) is None and never matches; company->domain resolution happens later at line 144-145 with no second suppression check. Same gap affects the --linkedin+--company path and batch rows resolved by company (find_batch resolves the company then calls find with domain set, but the identity was suppressed under name@domain \u2014 actually batch passes the resolved domain so batch is covered; the --company direct path is not).",
+   "suggested_fix": "After resolved_domain is computed and normalized (~line 155-156), add a second gate: if self.compliance.is_suppressed(None, name_str, resolved_domain): return FindResult(query=query, domain=resolved_domain, provider=Provider.NONE_UNKNOWN, strategy=..., suppressed=True, notes=[...]). Combined with the candidate-email re-check for finding 1, this closes both the identity-key and email-key paths regardless of whether the domain came from --domain or --company.",
+   "repro_note": "Reproduced: identity opt-out then find via --domain -> suppressed=True; same identity via --company (resolve_domain_for_company monkeypatched to return example.com, standing in for wired seed map) -> suppressed=False, best.email=john.doe@example.com."
+  }
+ ],
+ "plausible": [
+  {
+   "summary": "The seed KB provider field disagrees with classify_provider(seed mx) for 6/219 domains; for the 2 gateway-fronted M365 tenants (jiostar.com, viacom18.com) the gateway-precedence rule flips the engine's live strategy from NO_PROBE to PROBE, defeating the M365 DELIVERABLE guard for those tenants.",
+   "file": "emailfinder/provider.py",
+   "line": 116,
+   "verdict": "PLAUSIBLE",
+   "severity": "low",
+   "failure_scenario": "classify_provider(['mx1.hc1549-65.ap.iphmx.com','jiostar-com.mail.protection.outlook.com']) returns CISCO_IRONPORT (provider.py rule 1: any gateway suffix wins over the M365 backend), and strategy_for(CISCO_IRONPORT)=PROBE. Engine._fingerprint (engine.py:427) derives the provider from classify_provider(live mx), NOT from the KB provider field, so find --verify on jiostar.com/viacom18.com probes with PROBE strategy and no M365 cap. CISCO_IRONPORT is not in scoring._ACCEPT_ALL_PROVIDERS, so an honest edge 250 from the IronPort gateway would map to Status.DELIVERABLE even though the backend is an M365 DBEB directory the dossier (3.1/4.3) warns can reject after-DATA. The rescore path (rescore._provider_for -> KB provider=microsoft365) treats the same tenants as M365, so the two surfaces disagree.",
+   "suggested_fix": "When a KB entry records provider=microsoft365, keep the M365 caps/NO_PROBE strategy even if a fronting gateway is detected on the live MX (or add CISCO_IRONPORT/other pure gateways to a catch-all-guard/accept-all strategy so an edge 250 can never certify DELIVERABLE). Also add a test asserting seed provider == classify_provider(seed mx) so the 6-domain drift stays visible.",
+   "repro_note": "Confirmed at code/data level: iterating the seed KB, 6/219 entries mismatch classify_provider(mx) \u2014 gmail.com(google_workspace->consumer_gmail), airtel.com/.in(microsoft365->other), yahoo.com(other->yahoo_aol), jiostar.com & viacom18.com(microsoft365->cisco_ironport). classify_provider + strategy_for confirm PROBE for the two M365 tenants, and engine.py:159-160/427 confirm strategy comes from classify_provider(live mx) not the KB field. Marked PLAUSIBLE (not CONFIRMED) and severity lowered to low because the actual DELIVERABLE outcome requires live network plus the IronPort edge returning an honest 250 for a nonexistent mailbox, which cannot be reproduced offline; the classifier/KB drift itself is confirmed but by-classification the M365 invariant is technically not violated (provider is IRONPORT, not M365)."
+  }
+ ]
+}

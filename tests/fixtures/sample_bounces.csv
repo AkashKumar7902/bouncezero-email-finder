@@ -1,0 +1,14 @@
+company,email,domain,local,shape,sep,bounce_status,reason_class
+Acme Example,wrong.guess@acme.example,acme.example,wrong.guess,first.last,.,Bounced,address_not_found
+Acme Example,missing.person@acme.example,acme.example,missing.person,first.last,.,Bounced,address_not_found
+Flat Example,znoexist@flat.example,flat.example,znoexist,single_token,,Bounced,address_not_found
+Widgets Example,ghost.user@widgets.example,widgets.example,ghost.user,first.last,.,Bounced,recipient_rejected
+Widgets Example,no.one@widgets.example,widgets.example,no.one,first.last,.,Bounced,recipient_rejected
+Acme Example,blocked.sender@acme.example,acme.example,blocked.sender,first.last,.,Bounced,recipient_rejected
+Acme Example,spam.flag@acme.example,acme.example,spam.flag,first.last,.,Bounced,policy_or_spam_rejection
+Loop Example,frank.hall@loop.example,loop.example,frank.hall,first.last,.,Bounced,routing_loop
+Loop Example,gina.reed@loop.example,loop.example,gina.reed,first.last,.,Bounced,routing_loop
+Acme Example,alice.martin@acme.example,acme.example,alice.martin,first.last,.,No bounce found,
+Acme Example,bob.stone@acme.example,acme.example,bob.stone,first.last,.,No bounce found,
+Underscore Example,ajith_c@underscore.example,underscore.example,ajith_c,first_last,_,No bounce found,
+Initials Example,priya.s@initials.example,initials.example,priya.s,first.l,.,No bounce found,
