@@ -153,6 +153,30 @@ Tests use small **synthetic fixtures** (`tests/fixtures/`, fake domains + names)
 classifier keeps the exact taxonomy the KB uses, so learned/re-scored rows stay
 schema-consistent.
 
+## Deploy free (Render + Neon)
+
+An **additive** public web app lives in `webapp/` (it does not touch the
+`emailfinder/` package or the 380-test suite). It reuses the pure core and serves
+a self-contained single-lookup page plus a small JSON API.
+
+Hosted-mode caveats:
+- **Verification is OFF** — the hosted app never opens SMTP probes; results are
+  pattern + provider-aware guesses.
+- **DNS still works** — MX lookup classifies the provider (M365 / catch-all) and
+  drives the honest confidence caps.
+- **Shared global state** in a free **Neon Postgres** (Render's free disk is
+  ephemeral); the KB, suppression list, and lookup log are shared across visitors.
+- **Cold starts** — Render's free service spins down after ~15 min idle and takes
+  ~30–60s to wake; the first request after a quiet period is slow, then fast.
+
+Quick path: create a free Neon Postgres and copy its **pooled** connection string,
+push this repo to GitHub, create a Render web service from it (Blueprint via
+`render.yaml`, or manual with build `pip install -e ".[web]"` and start
+`uvicorn webapp.app:app --host 0.0.0.0 --port $PORT`), set `DATABASE_URL` to the
+Neon string, and deploy. Full step-by-step: **[`webapp/DEPLOY.md`](webapp/DEPLOY.md)**.
+Free-tier limits change — double-check current Render/Neon limits before relying
+on them.
+
 ## How it was built
 
 Research → adversarial verification → ideation → architecture → implementation →

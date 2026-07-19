@@ -1,0 +1,31 @@
+# Render Blueprint for the BounceZero hosted web app.
+# Docs: https://render.com/docs/blueprint-spec  (verify current fields/tiers at deploy time)
+#
+# One free web service that serves webapp.app:app (FastAPI). Verification (SMTP)
+# is OFF on the hosted app; DNS MX classification still runs. Shared state lives
+# in a free Neon Postgres, wired via the DATABASE_URL env var (set manually — the
+# free Neon DB is created outside this blueprint; see webapp/DEPLOY.md).
+services:
+  - type: web
+    name: bouncezero-web
+    runtime: python
+    plan: free
+    # Build the package with its [web] extra (fastapi, uvicorn, psycopg, python-multipart).
+    buildCommand: pip install -e ".[web]"
+    # $PORT is injected by Render; bind 0.0.0.0 so the platform can reach it.
+    startCommand: uvicorn webapp.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # Pin the Python version. Bump to any current 3.12.x Render supports.
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      # Neon Postgres pooled connection string. sync=false keeps it OUT of the
+      # blueprint so you paste the real secret in the Render dashboard (never in git).
+      - key: DATABASE_URL
+        sync: false
+      # Per-IP rate-limit knobs (optional; defaults live in webapp/app.py).
+      - key: RATE_LIMIT_PER_MIN
+        value: "30"
+      - key: RATE_LIMIT_PER_DAY
+        value: "300"
