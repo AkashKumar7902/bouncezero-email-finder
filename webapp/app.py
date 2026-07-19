@@ -55,8 +55,10 @@ def _build_finder() -> HostedFinder:
         # Imported lazily so the module imports fine even without psycopg.
         from webapp.store_pg import PgStore, init_schema
 
+        # init_schema accepts a DSN and opens/closes its own connection — this is
+        # the contract's intended call and avoids relying on a lazily-None conn.
+        init_schema(dsn)
         store = PgStore(dsn)
-        _init_pg_schema(store, init_schema)
         logger.info("using Postgres store (DATABASE_URL configured)")
         return HostedFinder(store)
     logger.warning("ephemeral in-memory store — dev only (set DATABASE_URL for persistence)")

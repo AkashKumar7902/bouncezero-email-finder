@@ -396,8 +396,8 @@ class PgStore:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT 1 FROM suppression WHERE "
-                "(%s IS NOT NULL AND email = %s) OR "
-                "(%s IS NOT NULL AND identity = %s) LIMIT 1",
+                "(%s::text IS NOT NULL AND email = %s) OR "
+                "(%s::text IS NOT NULL AND identity = %s) LIMIT 1",
                 (norm_email, norm_email, key, key),
             )
             return cur.fetchone() is not None
