@@ -32,8 +32,8 @@ bounced **18.6%** of the time. A handful of findings shaped the whole design
 | Google / Proofpoint / Mimecast / IronPort return **honest** 550 5.1.1 | those are the only providers the SMTP prober trusts |
 | Outbound **port 25 is blocked** on laptops & most cloud VMs | SMTP verify is optional, detects the block fast, and degrades to `verification_unavailable` — never a false "invalid" |
 
-> The full anonymised analysis (aggregate stats + methodology, no individual
-> addresses) lives in `audit_analysis/` and `research/` for reference.
+> These findings are encoded as rules/priors in the code; the raw analysis that
+> produced them is kept out of this repository.
 
 ## What it does
 
@@ -130,8 +130,7 @@ LinkedIn URL is only ever slug-parsed locally.
 ## Architecture
 
 A pure core (no I/O) + an I/O layer + thin surfaces, wired by one fixed pipeline
-in `engine.py`. See `architecture/MODULE_CONTRACTS.md` for the full module map
-and `research/RESEARCH_DOSSIER.md` for the verified domain research.
+in `engine.py`.
 
 ```
 normalize → names → templates/candidates → ranking      (pure: generation)
@@ -181,9 +180,8 @@ on them.
 
 Research → adversarial verification → ideation → architecture → implementation →
 adversarial verification, each stage run as a fan-out of specialized agents.
-Artifacts live in `research/`, `architecture/`, and `audit_analysis/`.
 
 ---
 
 *Not legal advice. Cold outreach is regulated (GDPR/CAN-SPAM/CASL/India DPDP);
-see the legal section of the research dossier and use responsibly.*
+use responsibly.*
